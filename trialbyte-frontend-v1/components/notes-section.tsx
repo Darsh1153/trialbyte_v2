@@ -16,10 +16,21 @@ import {
   Link as LinkIcon, 
   Paperclip,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Upload,
+  FileText,
+  Image,
+  File
 } from "lucide-react";
 import { format } from "date-fns";
 import CustomDateInput from "@/components/ui/custom-date-input";
+import { UploadButton } from "@/lib/uploadthing";
+
+export interface AttachmentFile {
+  name: string;
+  url: string;
+  type: string;
+}
 
 export interface NoteItem {
   id: string;
@@ -27,7 +38,9 @@ export interface NoteItem {
   type: string;
   content: string;
   sourceLink?: string;
-  attachments?: string[];
+  sourceType?: string;
+  sourceUrl?: string;
+  attachments?: AttachmentFile[];
   isVisible: boolean;
   isExpanded?: boolean;
 }
@@ -40,23 +53,22 @@ export interface NotesSectionProps {
   onRemoveNote: (index: number) => void;
   onToggleVisibility?: (index: number) => void;
   noteTypes?: string[];
+  sourceTypes?: string[];
   className?: string;
   showAddButton?: boolean;
 }
 
 const DEFAULT_NOTE_TYPES = [
-  "General",
-  "Clinical",
-  "Regulatory",
-  "Safety",
-  "Efficacy",
-  "Protocol",
-  "Site",
-  "Patient",
-  "Adverse Event",
-  "Publication",
-  "Press Release",
-  "Other"
+  "Interim",
+  "Full Results",
+  "Primary Endpoint Results",
+  "Analysis"
+];
+
+const DEFAULT_SOURCE_TYPES = [
+  "PubMed",
+  "Journals",
+  "Conferences"
 ];
 
 export function NotesSection({
@@ -67,10 +79,27 @@ export function NotesSection({
   onRemoveNote,
   onToggleVisibility,
   noteTypes = DEFAULT_NOTE_TYPES,
+  sourceTypes = DEFAULT_SOURCE_TYPES,
   className = "",
   showAddButton = true
 }: NotesSectionProps) {
   const [expandedNotes, setExpandedNotes] = useState<Set<number>>(new Set());
+
+  // Helper function to get file icon based on file type
+  const getFileIcon = (fileType: string) => {
+    if (fileType.startsWith('image/')) {
+      return <Image className="h-4 w-4 text-blue-500" />;
+    } else if (fileType === 'application/pdf') {
+      return <FileText className="h-4 w-4 text-red-500" />;
+    } else {
+      return <File className="h-4 w-4 text-gray-500" />;
+    }
+  };
+
+  // Helper function to check if file is an image
+  const isImageFile = (fileType: string) => {
+    return fileType.startsWith('image/');
+  };
 
   const toggleNoteExpansion = (index: number) => {
     setExpandedNotes(prev => {
@@ -127,9 +156,12 @@ export function NotesSection({
               const originalIndex = notes.findIndex(n => n.id === note.id);
               const isExpanded = expandedNotes.has(originalIndex);
               
+              // Ensure we have a unique key - use note.id if available, otherwise fallback to index
+              const noteKey = note.id || `note-${originalIndex}-${index}`;
+              
               return (
                 <div
-                  key={note.id}
+                  key={noteKey}
                   className={`border rounded-lg transition-all duration-200 ${
                     note.isVisible 
                       ? "border-gray-200 bg-white shadow-sm" 
@@ -147,7 +179,7 @@ export function NotesSection({
                       <div className="flex items-center space-x-1 text-xs text-gray-500">
                         <Calendar className="h-3 w-3" />
                         <span>
-                          {note.date ? format(new Date(note.date), "MMM dd, yyyy") : "No date"}
+                          {note.date ? format(new Date(note.date), "MM-dd-yyyy") : "No date"}
                         </span>
                       </div>
                       
@@ -217,7 +249,7 @@ export function NotesSection({
                           <CustomDateInput
                             value={note.date}
                             onChange={(value) => onUpdateNote(originalIndex, { date: value })}
-                            placeholder="Month Day Year"
+                            placeholder="MM-DD-YYYY"
                             className="text-sm"
                           />
                         </div>
@@ -255,92 +287,108 @@ export function NotesSection({
                         />
                       </div>
                       
-                      {/* View Source Link */}
+                      {/* Source URL Input */}
                       <div className="space-y-2">
-                        <Label className="text-sm font-medium">Source Link</Label>
-                        <div className="flex items-center space-x-2">
+                        <Label className="text-sm font-medium">Source</Label>
+                        <div className="relative">
+                          <LinkIcon className="absolute left-3 top-3 h-4 w-4 text-gray-400" />
                           <Input
-                            value={note.sourceLink || ""}
-                            onChange={(e) => onUpdateNote(originalIndex, { sourceLink: e.target.value })}
+                            type="url"
                             placeholder="https://..."
-                            className="text-sm flex-1"
+                            value={note.sourceUrl || ""}
+                            onChange={(e) => onUpdateNote(originalIndex, { sourceUrl: e.target.value })}
+                            className="pl-10 text-sm"
                           />
-                          {note.sourceLink && (
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              asChild
-                            >
-                              <a
-                                href={note.sourceLink}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="flex items-center space-x-1"
-                              >
-                                <LinkIcon className="h-4 w-4" />
-                                <span>View</span>
-                              </a>
-                            </Button>
-                          )}
                         </div>
                       </div>
                       
                       {/* Attachments */}
                       <div className="space-y-2">
                         <Label className="text-sm font-medium">Attachments</Label>
-                        <div className="space-y-2">
-                          {note.attachments?.map((attachment, attachmentIndex) => (
-                            <div key={attachmentIndex} className="flex items-center space-x-2">
-                              <Paperclip className="h-4 w-4 text-gray-500" />
-                              <span className="text-sm text-gray-700 flex-1">{attachment}</span>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => {
-                                  const updatedAttachments = note.attachments?.filter((_, i) => i !== attachmentIndex);
-                                  onUpdateNote(originalIndex, { attachments: updatedAttachments });
-                                }}
-                                className="text-red-600 hover:text-red-700"
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
+                        <div className="space-y-3">
+                          {/* Display uploaded files */}
+                          {note.attachments?.map((attachment, attachmentIndex) => {
+                            // Use attachment URL or name as key for better uniqueness
+                            const attachmentKey = attachment.url || attachment.name || `attachment-${attachmentIndex}`;
+                            return (
+                            <div key={`${noteKey}-attachment-${attachmentKey}`} className="border rounded-lg p-3 bg-gray-50">
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center space-x-3">
+                                  {getFileIcon(attachment.type)}
+                                  <div className="flex-1">
+                                    <p className="text-sm font-medium text-gray-700">{attachment.name}</p>
+                                    <p className="text-xs text-gray-500">{attachment.type}</p>
+                                  </div>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => window.open(attachment.url, '_blank')}
+                                    className="text-blue-600 hover:text-blue-700"
+                                  >
+                                    <Eye className="h-4 w-4" />
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => {
+                                      const updatedAttachments = note.attachments?.filter((_, i) => i !== attachmentIndex);
+                                      onUpdateNote(originalIndex, { attachments: updatedAttachments });
+                                    }}
+                                    className="text-red-600 hover:text-red-700"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              </div>
+                              
+                              {/* Image preview */}
+                              {isImageFile(attachment.type) && (
+                                <div className="mt-3">
+                                  <img
+                                    src={attachment.url}
+                                    alt={attachment.name}
+                                    className="max-w-full h-32 object-cover rounded border"
+                                    onError={(e) => {
+                                      (e.target as HTMLImageElement).style.display = 'none';
+                                    }}
+                                  />
+                                </div>
+                              )}
                             </div>
-                          )) || []}
+                            );
+                          })}
                           
-                          <div className="flex items-center space-x-2">
-                            <Input
-                              placeholder="Add attachment URL or description..."
-                              className="text-sm flex-1"
-                              onKeyPress={(e) => {
-                                if (e.key === 'Enter') {
-                                  const input = e.target as HTMLInputElement;
-                                  const newAttachment = input.value.trim();
-                                  if (newAttachment) {
+                          {/* Upload button */}
+                          <div className="border-2 border-dashed border-gray-300 rounded-lg p-4">
+                            <div className="text-center">
+                              <Upload className="h-8 w-8 text-gray-400 mx-auto mb-2" />
+                              <p className="text-sm text-gray-600 mb-2">Upload files to attach to this note</p>
+                              <UploadButton
+                                endpoint="therapeuticFileUploader"
+                                onClientUploadComplete={(res) => {
+                                  if (res && res[0]) {
+                                    const newAttachment: AttachmentFile = {
+                                      name: res[0].name,
+                                      url: res[0].url,
+                                      type: res[0].type || 'application/octet-stream'
+                                    };
                                     const updatedAttachments = [...(note.attachments || []), newAttachment];
                                     onUpdateNote(originalIndex, { attachments: updatedAttachments });
-                                    input.value = '';
                                   }
-                                }
-                              }}
-                            />
-                            <Button
-                              type="button"
-                              variant="outline"
-                              size="sm"
-                              onClick={(e) => {
-                                const input = e.currentTarget.previousElementSibling as HTMLInputElement;
-                                const newAttachment = input.value.trim();
-                                if (newAttachment) {
-                                  const updatedAttachments = [...(note.attachments || []), newAttachment];
-                                  onUpdateNote(originalIndex, { attachments: updatedAttachments });
-                                  input.value = '';
-                                }
-                              }}
-                            >
-                              <Plus className="h-4 w-4" />
-                            </Button>
+                                }}
+                                onUploadError={(error: Error) => {
+                                  console.error('Upload error:', error);
+                                }}
+                                appearance={{
+                                  button: "bg-[#204B73] hover:bg-[#1a3d5c] text-white px-4 py-2 rounded-md text-sm font-medium",
+                                  allowedContent: "text-xs text-gray-500 mt-1"
+                                }}
+                              />
+                            </div>
                           </div>
                         </div>
                       </div>

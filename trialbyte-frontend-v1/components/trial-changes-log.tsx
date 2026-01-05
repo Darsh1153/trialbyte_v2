@@ -69,6 +69,34 @@ const formatTimestamp = (timestamp: string) => {
   }
 };
 
+// Helper function to safely format values for display
+const formatValueForDisplay = (value: any): string => {
+  if (value === null || value === undefined) {
+    return '';
+  }
+  
+  // If it's already a string, return it
+  if (typeof value === 'string') {
+    return value;
+  }
+  
+  // If it's an object or array, stringify it
+  if (typeof value === 'object') {
+    try {
+      // For attachment objects, show a more readable format
+      if (value.name && value.url) {
+        return `Attachment: ${value.name}`;
+      }
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  
+  // For other types, convert to string
+  return String(value);
+};
+
 export default function TrialChangesLog({ changesLog, className = "" }: TrialChangesLogProps) {
   // Sort changes by timestamp (newest first)
   const sortedChanges = [...changesLog].sort((a, b) => 
@@ -108,11 +136,6 @@ export default function TrialChangesLog({ changesLog, className = "" }: TrialCha
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
                           <span className="font-medium capitalize">{change.action}</span>
-                          {change.field && (
-                            <span className="text-sm text-gray-600">
-                              • {change.field}
-                            </span>
-                          )}
                         </div>
                         <p className="text-sm mb-2">{change.details}</p>
                         <div className="flex items-center gap-4 text-xs text-gray-500">
@@ -125,14 +148,6 @@ export default function TrialChangesLog({ changesLog, className = "" }: TrialCha
                             <span>by {change.user}</span>
                           </div>
                         </div>
-                        {change.oldValue && change.newValue && (
-                          <div className="mt-2 text-xs">
-                            <div className="flex gap-2">
-                              <span className="text-red-600">- {change.oldValue}</span>
-                              <span className="text-green-600">+ {change.newValue}</span>
-                            </div>
-                          </div>
-                        )}
                       </div>
                     </div>
                   </div>

@@ -39,7 +39,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { toast } from "@/hooks/use-toast";
+import { formatDateToMMDDYYYY } from "@/lib/date-utils";
 import Image from "next/image";
 import { ClinicalTrialFilterModal, ClinicalTrialFilterState } from "@/components/clinical-trial-filter-modal";
 import { ClinicalTrialAdvancedSearchModal, ClinicalTrialSearchCriteria } from "@/components/clinical-trial-advanced-search-modal";
@@ -55,6 +55,7 @@ interface TherapeuticTrial {
     id: string;
     therapeutic_area: string;
     trial_identifier: string[];
+    trial_id?: string; // New field for TB-XXXXXX format
     trial_phase: string;
     status: string;
     primary_drugs: string;
@@ -135,6 +136,7 @@ interface TherapeuticTrial {
     last_modified_user: string | null;
     full_review_user: string | null;
     next_review_date: string | null;
+    attachment: string | null;
   }>;
   notes: Array<{
     id: string;
@@ -336,8 +338,7 @@ export default function ClinicalTrialDashboard() {
 
   // Format date for display
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return "N/A";
-    return new Date(dateString).toLocaleDateString();
+    return formatDateToMMDDYYYY(dateString);
   };
 
   const getStatusColor = (status: string) => {
@@ -494,7 +495,7 @@ export default function ClinicalTrialDashboard() {
   const getFavoriteTrialsData = () => {
     return trials.filter(trial => favoriteTrials.includes(trial.trial_id)).map(trial => ({
       id: trial.trial_id,
-      trialId: `#${trial.trial_id.slice(0, 6)}`,
+      trialId: trial.overview.trial_id || `#${trial.trial_id.slice(0, 6)}`,
       therapeuticArea: trial.overview.therapeutic_area,
       diseaseType: trial.overview.disease_type,
       primaryDrug: trial.overview.primary_drugs,
@@ -526,7 +527,7 @@ export default function ClinicalTrialDashboard() {
                     onClick={(e) => e.stopPropagation()} // Prevent card click when clicking checkbox
                   />
                   <span className="text-blue-600 font-medium">
-                    #{trial.trial_id.slice(0, 6)}
+                    {trial.overview.trial_id || `#${trial.trial_id.slice(0, 6)}`}
                   </span>
                 </div>
                 <Badge className={getStatusColor(trial.overview.status)}>
@@ -1093,7 +1094,7 @@ export default function ClinicalTrialDashboard() {
                               onClick={(e) => e.stopPropagation()} // Prevent row click when clicking checkbox
                             />
                             <span className="text-blue-600 font-medium">
-                              #{trial.trial_id.slice(0, 6)}
+                              {trial.overview.trial_id || '#' + trial.trial_id.slice(0, 6)}
                             </span>
                           </div>
                         </TableCell>

@@ -21,7 +21,8 @@ import {
   Trash2, 
   Eye,
   Calendar,
-  X
+  X,
+  Edit
 } from "lucide-react"
 import { toast } from "@/hooks/use-toast"
 
@@ -44,12 +45,14 @@ interface QueryHistoryModalProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   onLoadQuery?: (queryData: any) => void
+  onEditQuery?: (queryData: any) => void
 }
 
 export function QueryHistoryModal({ 
   open, 
   onOpenChange,
-  onLoadQuery 
+  onLoadQuery,
+  onEditQuery 
 }: QueryHistoryModalProps) {
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([])
   const [loading, setLoading] = useState(false)
@@ -61,8 +64,7 @@ export function QueryHistoryModal({
     setError("")
     
     try {
-      // Get all dashboard queries by calling a special endpoint
-      // For now, we'll modify the backend to handle dashboard queries
+      // Try to fetch from API first
       let url = `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/queries/saved/user/dashboard-queries`
       
       if (searchTerm.trim()) {
@@ -77,15 +79,45 @@ export function QueryHistoryModal({
         credentials: "include",
       })
 
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      if (response.ok) {
+        const data = await response.json()
+        console.log("API response:", data);
+        console.log("API data.data:", data.data);
+        console.log("API queries count:", data.data?.length || 0);
+        
+        // If API returns empty data, fallback to localStorage
+        if (!data.data || data.data.length === 0) {
+          console.log("API returned empty data, using localStorage fallback")
+          const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+          console.log("Loaded from localStorage:", localQueries);
+          console.log("Total queries loaded:", localQueries.length);
+          setSavedQueries(localQueries)
+        } else {
+          setSavedQueries(data.data || [])
+        }
+        return
       }
-
-      const data = await response.json()
-      setSavedQueries(data.data || [])
+      
+      // If API fails, fallback to localStorage
+      console.log("API failed, using localStorage fallback")
+      const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+      console.log("Loaded from localStorage:", localQueries);
+      console.log("Total queries loaded:", localQueries.length);
+      setSavedQueries(localQueries)
+      
     } catch (error) {
       console.error("Error fetching saved queries:", error)
-      setError(error instanceof Error ? error.message : "Failed to fetch saved queries")
+      
+      // Fallback to localStorage
+      try {
+        const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+        console.log("Fallback - Loaded from localStorage:", localQueries);
+        console.log("Fallback - Total queries loaded:", localQueries.length);
+        setSavedQueries(localQueries)
+        setError("") // Clear error since we have fallback data
+      } catch (localError) {
+        setError("Failed to load saved queries")
+      }
     } finally {
       setLoading(false)
     }
@@ -93,6 +125,7 @@ export function QueryHistoryModal({
 
   const deleteSavedQuery = async (queryId: string) => {
     try {
+      // Try API first
       const response = await fetch(
         `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/queries/saved/${queryId}`,
         {
@@ -104,33 +137,85 @@ export function QueryHistoryModal({
         }
       )
 
-      if (!response.ok) {
-        throw new Error("Failed to delete query")
+      if (response.ok) {
+        toast({
+          title: "Success",
+          description: "Query deleted successfully",
+        })
+        // Refresh the list
+        await fetchSavedQueries()
+        return
       }
-
+      
+      // If API fails, use localStorage fallback
+      const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+      const updatedQueries = localQueries.filter((query: any) => query.id !== queryId)
+      localStorage.setItem('unifiedSavedQueries', JSON.stringify(updatedQueries))
+      
       toast({
         title: "Success",
         description: "Query deleted successfully",
       })
-
+      
       // Refresh the list
       await fetchSavedQueries()
+      
     } catch (error) {
       console.error("Error deleting query:", error)
-      toast({
-        title: "Error",
-        description: "Failed to delete query",
-        variant: "destructive",
-      })
+      
+      // Still try localStorage fallback
+      try {
+        const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+        const updatedQueries = localQueries.filter((query: any) => query.id !== queryId)
+        localStorage.setItem('unifiedSavedQueries', JSON.stringify(updatedQueries))
+        
+        toast({
+          title: "Success",
+          description: "Query deleted successfully",
+        })
+        
+        // Refresh the list
+        await fetchSavedQueries()
+      } catch (localError) {
+        console.error("Failed to delete from localStorage:", localError)
+        toast({
+          title: "Error",
+          description: "Failed to delete query",
+          variant: "destructive",
+        })
+      }
     }
   }
 
   const loadQuery = (query: SavedQuery) => {
     if (onLoadQuery && query.query_data) {
-      onLoadQuery(query.query_data)
+      // Pass the complete query object instead of just query_data
+      onLoadQuery({
+        ...query.query_data,
+        queryId: query.id,
+        queryTitle: query.title,
+        queryDescription: query.description
+      })
       toast({
         title: "Query Loaded",
         description: `"${query.title}" has been applied to your current view`,
+      })
+      onOpenChange(false)
+    }
+  }
+
+  const editQuery = (query: SavedQuery) => {
+    if (onEditQuery && query.query_data) {
+      // Pass the complete query object for editing
+      onEditQuery({
+        ...query.query_data,
+        queryId: query.id,
+        queryTitle: query.title,
+        queryDescription: query.description
+      })
+      toast({
+        title: "Edit Query",
+        description: `Opening Advanced Search with "${query.title}"`,
       })
       onOpenChange(false)
     }
@@ -185,7 +270,7 @@ export function QueryHistoryModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle>Query History</DialogTitle>
+          <DialogTitle>Saved Queries</DialogTitle>
         </DialogHeader>
         
         <div className="flex-1 flex flex-col space-y-4 overflow-hidden">
@@ -281,6 +366,15 @@ export function QueryHistoryModal({
                               title="Load this query"
                             >
                               <Eye className="h-3 w-3" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => editQuery(query)}
+                              title="Edit this query"
+                              className="text-blue-600 hover:text-blue-700"
+                            >
+                              <Edit className="h-3 w-3" />
                             </Button>
                             <Button
                               variant="outline"

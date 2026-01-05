@@ -1,33 +1,37 @@
 "use client"
 
+import { formatDateToMMDDYYYY } from "@/lib/date-utils";
+import { getUniqueFieldValues, normalizePhaseValue, arePhasesEquivalent } from "@/lib/search-utils";
 import { useState, useEffect } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Badge } from "@/components/ui/badge"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow
+} from "@/components/ui/table"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Calendar } from "@/components/ui/calendar"
-import { X, Plus, Minus, CalendarIcon } from "lucide-react"
+import { X, Plus, Minus, CalendarIcon, Search, Calendar as CalendarIcon2, Eye, Trash2, Loader2, AlertCircle } from "lucide-react"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
 import CustomDateInput from "@/components/ui/custom-date-input"
 import { MultiTagInput } from "@/components/ui/multi-tag-input"
+import { SearchableSelect } from "@/components/ui/searchable-select"
+import { SaveQueryModal } from "@/components/save-query-modal"
+import { TherapeuticFilterState, TherapeuticSearchCriteria, DEFAULT_THERAPEUTIC_FILTERS } from "@/components/therapeutic-types"
+export type { TherapeuticSearchCriteria } // Re-export for compatibility
+import { toast } from "@/hooks/use-toast"
+import { useDrugNames } from "@/hooks/use-drug-names"
 
-interface TherapeuticAdvancedSearchModalProps {
-  open: boolean
-  onOpenChange: (open: boolean) => void
-  onApplySearch: (criteria: TherapeuticSearchCriteria[]) => void
-}
-
-export interface TherapeuticSearchCriteria {
-  id: string
-  field: string
-  operator: string
-  value: string | string[] // Support both single string and array of strings
-  logic: "AND" | "OR"
-}
-
-// Interface for therapeutic trial data
+// Define TherapeuticTrial interface locally
 interface TherapeuticTrial {
   trial_id: string;
   overview: {
@@ -109,6 +113,11 @@ interface TherapeuticTrial {
     id: string;
     trial_id: string;
     trial_changes_log: string;
+    trial_added_date: string;
+    last_modified_date: string | null;
+    last_modified_user: string | null;
+    full_review_user: string | null;
+    next_review_date: string | null;
   }>;
   notes: Array<{
     id: string;
@@ -117,71 +126,88 @@ interface TherapeuticTrial {
   }>;
 }
 
+interface TherapeuticAdvancedSearchModalProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onApplySearch: (criteria: TherapeuticSearchCriteria[]) => void
+  trials?: TherapeuticTrial[] // Add trials data for dynamic dropdowns
+  currentFilters?: TherapeuticFilterState // Add current filters for save query functionality
+  initialCriteria?: TherapeuticSearchCriteria[] // Add initial criteria for editing
+  editingQueryId?: string | null
+  editingQueryTitle?: string
+  editingQueryDescription?: string
+  onSaveQuerySuccess?: () => void
+}
+
+
+
 const therapeuticSearchFields = [
-  // Main fields that should have dropdowns (from database)
+  // Core dropdown fields from trial creation (Step 5-1)
   { value: "therapeutic_area", label: "Therapeutic Area" },
-  { value: "disease_type", label: "Disease Type" },
   { value: "trial_phase", label: "Trial Phase" },
   { value: "status", label: "Status" },
   { value: "primary_drugs", label: "Primary Drugs" },
   { value: "other_drugs", label: "Other Drugs" },
-  { value: "title", label: "Title" },
+  { value: "disease_type", label: "Disease Type" },
   { value: "patient_segment", label: "Patient Segment" },
   { value: "line_of_therapy", label: "Line of Therapy" },
   { value: "sponsor_collaborators", label: "Sponsor Collaborators" },
+  { value: "sponsor_field_activity", label: "Sponsor Field Activity" },
   { value: "associated_cro", label: "Associated CRO" },
   { value: "countries", label: "Countries" },
   { value: "region", label: "Region" },
   { value: "trial_record_status", label: "Trial Record Status" },
+
+  // Eligibility criteria dropdown fields (Step 5-3)
+  { value: "gender", label: "Gender" },
+  { value: "healthy_volunteers", label: "Healthy Volunteers" },
+
+  // Results dropdown fields (Step 5-5)
+  { value: "trial_outcome", label: "Trial Outcome" },
+  { value: "adverse_event_reported", label: "Adverse Event Reported" },
+  { value: "adverse_event_type", label: "Adverse Event Type" },
+
+  // Additional data dropdown fields (Step 5-7)
+  { value: "publication_type", label: "Publication Type" },
+  { value: "registry_name", label: "Registry Name" },
+  { value: "study_type", label: "Study Type" },
+
+  // Study design keywords (Step 5-2) - dropdown
+  { value: "study_design_keywords", label: "Study Design Keywords" },
+
+  // Text fields that are searchable (Step 5-1)
+  { value: "title", label: "Title" },
   { value: "trial_identifier", label: "Trial Identifier" },
   { value: "reference_links", label: "Reference Links" },
-  
-  // Additional fields
-  { value: "actual_enrollment", label: "Actual Enrollment" },
-  { value: "adverse_events", label: "Adverse Events" },
-  { value: "adverse_events_reported", label: "Adverse Events Reported" },
-  { value: "age_max", label: "Age Maximum" },
-  { value: "age_min", label: "Age Minimum" },
-  { value: "biomarker_requirements", label: "Biomarker Requirements" },
-  { value: "conclusion", label: "Conclusion" },
-  { value: "created_at", label: "Created Date" },
-  { value: "ecog_performance_status", label: "ECOG Performance Status" },
-  { value: "efficacy_results", label: "Efficacy Results" },
-  { value: "enrollment_status", label: "Enrollment Status" },
-  { value: "estimated_enrollment", label: "Estimated Enrollment" },
-  { value: "exclusion_criteria", label: "Exclusion Criteria" },
-  { value: "final_analysis_date", label: "Final Analysis Date" },
-  { value: "first_patient_in", label: "First Patient In" },
-  { value: "gender", label: "Gender" },
-  { value: "inclusion_criteria", label: "Inclusion Criteria" },
-  { value: "interim_analysis_dates", label: "Interim Analysis Dates" },
-  { value: "last_patient_in", label: "Last Patient In" },
-  { value: "number_of_arms", label: "Number of Arms" },
-  { value: "otherOutcomeMeasures", label: "Other Outcome Measures" },
-  { value: "pipeline_data", label: "Pipeline Data" },
-  { value: "population_description", label: "Population Description" },
-  { value: "post_publications", label: "Post Publications" },
-  { value: "press_releases", label: "Press Releases" },
-  { value: "primary_completion_date", label: "Primary Completion Date" },
-  { value: "primary_outcome_measure", label: "Primary Outcome Measure" },
-  { value: "purpose_of_trial", label: "Purpose of Trial" },
-  { value: "recruitment_period", label: "Recruitment Period" },
-  { value: "regulatory_submission_date", label: "Regulatory Submission Date" },
-  { value: "results_available", label: "Results Available" },
-  { value: "sponsor_field_activity", label: "Sponsor Field Activity" },
-  { value: "start_date_estimated", label: "Start Date Estimated" },
-  { value: "study_completion_date", label: "Study Completion Date" },
-  { value: "study_design", label: "Study Design" },
-  { value: "study_design_keywords", label: "Study Design Keywords" },
-  { value: "study_end_date", label: "Study End Date" },
-  { value: "study_sites", label: "Study Sites" },
-  { value: "study_start_date", label: "Study Start Date" },
-  { value: "summary", label: "Summary" },
-  { value: "target_enrollment", label: "Target Enrollment" },
-  { value: "trial_end_date_estimated", label: "Trial End Date Estimated" },
   { value: "trial_tags", label: "Trial Tags" },
+  { value: "study_design", label: "Study Design" },
+
+  // Text fields from Step 5-2: Trial Purpose & Design
+  { value: "purpose_of_trial", label: "Purpose of Trial" },
+  { value: "summary", label: "Summary" },
+  { value: "primaryOutcomeMeasures", label: "Primary Outcome Measures" },
+  { value: "otherOutcomeMeasures", label: "Other Outcome Measures" },
   { value: "treatment_regimen", label: "Treatment Regimen" },
-  { value: "updated_at", label: "Updated Date" }
+
+  // Text fields from Step 5-3: Eligibility Criteria
+  { value: "inclusion_criteria", label: "Inclusion Criteria" },
+  { value: "exclusion_criteria", label: "Exclusion Criteria" },
+
+  // Text fields from Step 5-8: Notes
+  { value: "notes", label: "Notes" },
+
+  // Numeric fields
+  { value: "number_of_arms", label: "Number of Arms" },
+  { value: "age_min", label: "Age Minimum" },
+  { value: "age_max", label: "Age Maximum" },
+
+  // Date fields
+  { value: "created_at", label: "Created Date" },
+  { value: "updated_at", label: "Updated Date" },
+
+  // Logs fields
+  { value: "last_modified_date", label: "Last Modified Date" },
+  { value: "last_modified_user", label: "Last Modified User" }
 ]
 
 const operators = [
@@ -198,31 +224,208 @@ const operators = [
   { value: "not_equals", label: "!=" }
 ]
 
-// Field-specific options for dropdowns
+// Field-specific options for dropdowns - matching exactly what's available in trial creation
 const fieldOptions: Record<string, { value: string; label: string }[]> = {
+  // Step 5-1: Trial Overview dropdowns
+  therapeutic_area: [
+    { value: "autoimmune", label: "Autoimmune" },
+    { value: "cardiovascular", label: "Cardiovascular" },
+    { value: "endocrinology", label: "Endocrinology" },
+    { value: "gastrointestinal", label: "Gastrointestinal" },
+    { value: "infectious", label: "Infectious" },
+    { value: "oncology", label: "Oncology" },
+    { value: "gastroenterology", label: "Gastroenterology" },
+    { value: "dermatology", label: "Dermatology" },
+    { value: "vaccines", label: "Vaccines" },
+    { value: "cns_neurology", label: "CNS/Neurology" },
+    { value: "ophthalmology", label: "Ophthalmology" },
+    { value: "immunology", label: "Immunology" },
+    { value: "rheumatology", label: "Rheumatology" },
+    { value: "haematology", label: "Haematology" },
+    { value: "nephrology", label: "Nephrology" },
+    { value: "urology", label: "Urology" }
+  ],
   trial_phase: [
-    { value: "Phase I", label: "Phase I" },
-    { value: "Phase II", label: "Phase II" },
-    { value: "Phase III", label: "Phase III" },
-    { value: "Phase IV", label: "Phase IV" },
-    { value: "Phase I/II", label: "Phase I/II" },
-    { value: "Phase II/III", label: "Phase II/III" },
-    { value: "Pre-clinical", label: "Pre-clinical" },
-    { value: "Not Applicable", label: "Not Applicable" }
+    { value: "phase_i", label: "Phase I" },
+    { value: "phase_i_ii", label: "Phase I/II" },
+    { value: "phase_ii", label: "Phase II" },
+    { value: "phase_ii_iii", label: "Phase II/III" },
+    { value: "phase_iii", label: "Phase III" },
+    { value: "phase_iii_iv", label: "Phase III/IV" },
+    { value: "phase_iv", label: "Phase IV" }
   ],
   status: [
-    { value: "Recruiting", label: "Recruiting" },
-    { value: "Active, not recruiting", label: "Active, not recruiting" },
-    { value: "Completed", label: "Completed" },
-    { value: "Suspended", label: "Suspended" },
-    { value: "Terminated", label: "Terminated" },
-    { value: "Withdrawn", label: "Withdrawn" },
-    { value: "Not yet recruiting", label: "Not yet recruiting" },
-    { value: "Enrolling by invitation", label: "Enrolling by invitation" }
+    { value: "planned", label: "Planned" },
+    { value: "open", label: "Open" },
+    { value: "closed", label: "Closed" },
+    { value: "completed", label: "Completed" },
+    { value: "terminated", label: "Terminated" }
   ],
+  // Disease Type - Exact options from creation phase
+  disease_type: [
+    { value: "acute_lymphocytic_leukemia", label: "Acute Lymphocytic Leukemia" },
+    { value: "acute_myelogenous_leukemia", label: "Acute Myelogenous Leukemia" },
+    { value: "anal", label: "Anal" },
+    { value: "appendiceal", label: "Appendiceal" },
+    { value: "basal_skin_cell_carcinoma", label: "Basal Skin Cell Carcinoma" },
+    { value: "bladder", label: "Bladder" },
+    { value: "breast", label: "Breast" },
+    { value: "cervical", label: "Cervical" },
+    { value: "cholangiocarcinoma", label: "Cholangiocarcinoma (Bile duct)" },
+    { value: "chronic_lymphocytic_leukemia", label: "Chronic Lymphocytic Leukemia" },
+    { value: "chronic_myelomonositic_leukemia", label: "Chronic Myelomonositic Leukemia" },
+    { value: "astrocytoma", label: "Astrocytoma" },
+    { value: "brain_stem_glioma", label: "Brain Stem Giloma" },
+    { value: "craniopharyngioma", label: "Carniopharyngioma" },
+    { value: "choroid_plexus_tumors", label: "Choroid Plexus Tumors" },
+    { value: "embryonal_tumors", label: "Embryonal Tumors" },
+    { value: "epedymoma", label: "Epedymoma" },
+    { value: "germ_cell_tumors", label: "Germ Cell Tumors" },
+    { value: "glioblastoma", label: "Giloblastoma" },
+    { value: "hemangioblastoma", label: "Hemangioblastoma" },
+    { value: "medulloblastoma", label: "Medulloblastoma" },
+    { value: "meningioma", label: "Meningioma" },
+    { value: "oligodendroglioma", label: "Oligodendrogiloma" },
+    { value: "pineal_tumor", label: "Pineal Tumor" },
+    { value: "pituitary_tumor", label: "Pituatory Tumor" },
+    { value: "colorectal", label: "Colorectal" },
+    { value: "endometrial", label: "Endometrial" },
+    { value: "esophageal", label: "Esophageal" },
+    { value: "fallopian_tube", label: "Fallopian Tube" },
+    { value: "gall_bladder", label: "Gall Bladder" },
+    { value: "gastric", label: "Gastirc" },
+    { value: "gist", label: "GIST" },
+    { value: "head_neck", label: "Head/Neck" },
+    { value: "hodgkins_lymphoma", label: "Hodgkin's Lymphoma" },
+    { value: "leukemia_chronic_myelogenous", label: "Leukemia, Chronic Myelogenous" },
+    { value: "liver", label: "Liver" },
+    { value: "lung_non_small_cell", label: "Lung Non-small cell" },
+    { value: "lung_small_cell", label: "Lung Small Cell" },
+    { value: "melanoma", label: "Melanoma" },
+    { value: "mesothelioma", label: "Mesothelioma" },
+    { value: "metastatic_cancer", label: "Metastatic Cancer" },
+    { value: "multiple_myeloma", label: "Multiple Myeloma" },
+    { value: "myelodysplastic_syndrome", label: "Myelodysplastic Syndrome" },
+    { value: "myeloproliferative_neoplasms", label: "Myeloproliferative Neoplasms" },
+    { value: "neuroblastoma", label: "Neuroblastoma" },
+    { value: "neuroendocrine", label: "Neuroendocrine" },
+    { value: "non_hodgkins_lymphoma", label: "Non-Hodgkin's Lymphoma" },
+    { value: "osteosarcoma", label: "Osteosarcoma" },
+    { value: "ovarian", label: "Ovarian" },
+    { value: "pancreas", label: "Pancreas" },
+    { value: "penile", label: "Penile" },
+    { value: "primary_peritoneal", label: "Primary Peritoneal" },
+    { value: "prostate", label: "Prostate" },
+    { value: "renal", label: "Renal" },
+    { value: "small_intestine", label: "Small Intestine" },
+    { value: "soft_tissue_carcinoma", label: "Soft Tissue Carcinoma" },
+    { value: "solid_tumor_unspecified", label: "Solid Tumor, Unspecified" },
+    { value: "squamous_skin_cell_carcinoma", label: "Squamous Skin Cell Carcinoma" },
+    { value: "supportive_care", label: "Supportive care" },
+    { value: "tenosynovial_giant_cell_tumor", label: "Tenosynovial Giant Cell Tumor" },
+    { value: "testicular", label: "Testicular" },
+    { value: "thymus", label: "Thymus" },
+    { value: "thyroid", label: "Thyroid" },
+    { value: "unspecified_cancer", label: "Unspecified Cancer" },
+    { value: "unspecified_haematological_cancer", label: "Unspecified Haematological Cancer" },
+    { value: "vaginal", label: "Vaginal" },
+    { value: "vulvar", label: "Vulvar" }
+  ],
+  // Patient Segment - Exact options from creation phase
+  patient_segment: [
+    { value: "children", label: "Children" },
+    { value: "adults", label: "Adults" },
+    { value: "healthy_volunteers", label: "Healthy Volunteers" },
+    { value: "unknown", label: "Unknown" },
+    { value: "first_line", label: "First Line" },
+    { value: "second_line", label: "Second Line" },
+    { value: "adjuvant", label: "Adjuvant" }
+  ],
+  // Line of Therapy - Exact options from creation phase
+  line_of_therapy: [
+    { value: "second_line", label: "2 – Second Line" },
+    { value: "unknown", label: "Unknown" },
+    { value: "first_line", label: "1 – First Line" },
+    { value: "at_least_second_line", label: "2+ - At least second line" },
+    { value: "at_least_third_line", label: "3+ - At least third line" },
+    { value: "neo_adjuvant", label: "Neo-Adjuvant" },
+    { value: "adjuvant", label: "Adjuvant" },
+    { value: "maintenance_consolidation", label: "Maintenance/Consolidation" },
+    { value: "at_least_first_line", label: "1+ - At least first line" }
+  ],
+  // Sponsor Collaborators - Exact options from creation phase
+  sponsor_collaborators: [
+    { value: "Pfizer", label: "Pfizer" },
+    { value: "Novartis", label: "Novartis" },
+    { value: "AstraZeneca", label: "AstraZeneca" }
+  ],
+  // Sponsor Field Activity - Exact options from creation phase
+  sponsor_field_activity: [
+    { value: "pharmaceutical_company", label: "Pharmaceutical Company" },
+    { value: "university_academy", label: "University/Academy" },
+    { value: "investigator", label: "Investigator" },
+    { value: "cro", label: "CRO" },
+    { value: "hospital", label: "Hospital" }
+  ],
+  // Associated CRO - Exact options from creation phase
+  associated_cro: [
+    { value: "IQVIA", label: "IQVIA" },
+    { value: "Syneos", label: "Syneos" },
+    { value: "PPD", label: "PPD" }
+  ],
+  // Countries - Exact options from creation phase
+  countries: [
+    { value: "united_states", label: "United States" },
+    { value: "canada", label: "Canada" },
+    { value: "united_kingdom", label: "United Kingdom" },
+    { value: "germany", label: "Germany" },
+    { value: "france", label: "France" },
+    { value: "italy", label: "Italy" },
+    { value: "spain", label: "Spain" },
+    { value: "japan", label: "Japan" },
+    { value: "china", label: "China" },
+    { value: "india", label: "India" },
+    { value: "australia", label: "Australia" },
+    { value: "brazil", label: "Brazil" },
+    { value: "mexico", label: "Mexico" },
+    { value: "south_korea", label: "South Korea" },
+    { value: "switzerland", label: "Switzerland" },
+    { value: "netherlands", label: "Netherlands" },
+    { value: "belgium", label: "Belgium" },
+    { value: "sweden", label: "Sweden" },
+    { value: "norway", label: "Norway" },
+    { value: "denmark", label: "Denmark" }
+  ],
+  // Region - Exact options from creation phase
+  region: [
+    { value: "north_america", label: "North America" },
+    { value: "europe", label: "Europe" },
+    { value: "asia_pacific", label: "Asia Pacific" },
+    { value: "latin_america", label: "Latin America" },
+    { value: "africa", label: "Africa" },
+    { value: "middle_east", label: "Middle East" }
+  ],
+  // Trial Record Status - Exact options from creation phase
+  trial_record_status: [
+    { value: "development_in_progress", label: "Development In Progress (DIP)" },
+    { value: "in_production", label: "In Production (IP)" },
+    { value: "update_in_progress", label: "Update In Progress (UIP)" }
+  ],
+  // Step 5-3: Eligibility Criteria dropdowns
+  gender: [
+    { value: "male", label: "Male" },
+    { value: "female", label: "Female" },
+    { value: "both", label: "Both" }
+  ],
+  healthy_volunteers: [
+    { value: "yes", label: "Yes" },
+    { value: "no", label: "No" },
+    { value: "no_information", label: "No Information" }
+  ],
+  // Step 5-5: Results dropdowns
   trial_outcome: [
-    { value: "Completed – Primary endpoints met", label: "Completed – Primary endpoints met" },
-    { value: "Completed – Primary endpoints not met", label: "Completed – Primary endpoints not met" },
+    { value: "Completed – Primary endpoints met.", label: "Completed – Primary endpoints met." },
+    { value: "Completed – Primary endpoints not met.", label: "Completed – Primary endpoints not met." },
     { value: "Completed – Outcome unknown", label: "Completed – Outcome unknown" },
     { value: "Completed – Outcome indeterminate", label: "Completed – Outcome indeterminate" },
     { value: "Terminated – Safety/adverse effects", label: "Terminated – Safety/adverse effects" },
@@ -236,120 +439,92 @@ const fieldOptions: Record<string, { value: string; label: string }[]> = {
     { value: "Terminated – Other", label: "Terminated – Other" },
     { value: "Terminated – Unknown", label: "Terminated – Unknown" }
   ],
-  therapeutic_area: [
-    { value: "oncology", label: "Oncology" },
-    { value: "cardiovascular", label: "Cardiovascular" },
-    { value: "autoimmune", label: "Autoimmune" },
-    { value: "neurology", label: "Neurology" },
-    { value: "infectious_diseases", label: "Infectious Diseases" },
-    { value: "metabolic", label: "Metabolic" },
-    { value: "respiratory", label: "Respiratory" },
-    { value: "gastroenterology", label: "Gastroenterology" },
-    { value: "dermatology", label: "Dermatology" },
-    { value: "ophthalmology", label: "Ophthalmology" },
-    { value: "urology", label: "Urology" },
-    { value: "gynecology", label: "Gynecology" },
-    { value: "pediatrics", label: "Pediatrics" },
-    { value: "geriatrics", label: "Geriatrics" },
-    { value: "other", label: "Other" }
+  adverse_event_reported: [
+    { value: "Yes", label: "Yes" },
+    { value: "No", label: "No" }
   ],
-  disease_type: [
-    { value: "breast", label: "Breast" },
-    { value: "lung_non_small_cell", label: "Lung Non-small cell" },
-    { value: "lung_small_cell", label: "Lung Small cell" },
-    { value: "colorectal", label: "Colorectal" },
-    { value: "prostate", label: "Prostate" },
-    { value: "ovarian", label: "Ovarian" },
-    { value: "pancreatic", label: "Pancreatic" },
-    { value: "gastric", label: "Gastric" },
-    { value: "liver", label: "Liver" },
-    { value: "kidney", label: "Kidney" },
-    { value: "bladder", label: "Bladder" },
-    { value: "cervical", label: "Cervical" },
-    { value: "endometrial", label: "Endometrial" },
-    { value: "thyroid", label: "Thyroid" },
-    { value: "brain", label: "Brain" },
-    { value: "bone", label: "Bone" },
-    { value: "skin", label: "Skin" },
-    { value: "blood", label: "Blood" },
-    { value: "lymphoma", label: "Lymphoma" },
-    { value: "leukemia", label: "Leukemia" },
-    { value: "myeloma", label: "Myeloma" },
-    { value: "sarcoma", label: "Sarcoma" },
-    { value: "other", label: "Other" }
+  adverse_event_type: [
+    { value: "Mild", label: "Mild" },
+    { value: "Moderate", label: "Moderate" },
+    { value: "Severe", label: "Severe" }
   ],
-  patient_segment: [
-    { value: "early_stage", label: "Early Stage" },
-    { value: "advanced_stage", label: "Advanced Stage" },
-    { value: "metastatic", label: "Metastatic" },
-    { value: "recurrent", label: "Recurrent" },
-    { value: "refractory", label: "Refractory" },
-    { value: "treatment_naive", label: "Treatment Naive" },
-    { value: "previously_treated", label: "Previously Treated" },
-    { value: "biomarker_positive", label: "Biomarker Positive" },
-    { value: "biomarker_negative", label: "Biomarker Negative" },
-    { value: "high_risk", label: "High Risk" },
-    { value: "standard_risk", label: "Standard Risk" },
-    { value: "other", label: "Other" }
+  // Step 5-7: Additional Data dropdowns
+  publication_type: [
+    { value: "company_presentation", label: "Company Presentation" },
+    { value: "sec_filing", label: "SEC Filing" },
+    { value: "company_conference_report", label: "Company Conference Report" },
+    { value: "revenue_reports", label: "Revenue Reports" },
+    { value: "others", label: "Others" }
   ],
-  line_of_therapy: [
-    { value: "first_line", label: "First Line" },
-    { value: "second_line", label: "Second Line" },
-    { value: "third_line", label: "Third Line" },
-    { value: "fourth_line", label: "Fourth Line" },
-    { value: "fifth_line", label: "Fifth Line" },
-    { value: "maintenance", label: "Maintenance" },
-    { value: "adjuvant", label: "Adjuvant" },
-    { value: "neoadjuvant", label: "Neoadjuvant" },
-    { value: "consolidation", label: "Consolidation" },
-    { value: "salvage", label: "Salvage" },
-    { value: "palliative", label: "Palliative" },
-    { value: "other", label: "Other" }
+  registry_name: [
+    { value: "euctr", label: "EUCTR" },
+    { value: "ctri", label: "CTRI" },
+    { value: "anzctr", label: "ANZCTR" },
+    { value: "slctr", label: "SLCTR" },
+    { value: "chictr", label: "ChiCTR" },
+    { value: "chinese_fda", label: "Chinese FDA" },
+    { value: "canadian_cancer_trials", label: "Canadian Cancer Trials" },
+    { value: "health_canada", label: "Health Canada" },
+    { value: "brazil_ctr", label: "Brazil CTR" },
+    { value: "german_ctr", label: "German CTR" },
+    { value: "cuban_ctr", label: "Cuban CTR" },
+    { value: "iran_ctr", label: "Iran CTR" },
+    { value: "lebanon_ctr", label: "Lebanon CTR" },
+    { value: "pactr", label: "PACTR" },
+    { value: "umin", label: "UMIN" }
   ],
-  gender: [
-    { value: "male", label: "Male" },
-    { value: "female", label: "Female" },
-    { value: "both", label: "Both" },
-    { value: "not_specified", label: "Not Specified" }
+  study_type: [
+    { value: "follow_up_study", label: "Follow up Study" },
+    { value: "observational_study", label: "Observational study" },
+    { value: "other_study", label: "Other Study" }
   ],
-  enrollment_status: [
-    { value: "recruiting", label: "Recruiting" },
-    { value: "active_not_recruiting", label: "Active, not recruiting" },
-    { value: "completed", label: "Completed" },
-    { value: "suspended", label: "Suspended" },
-    { value: "terminated", label: "Terminated" },
-    { value: "withdrawn", label: "Withdrawn" },
-    { value: "not_yet_recruiting", label: "Not yet recruiting" },
-    { value: "enrolling_by_invitation", label: "Enrolling by invitation" }
+  // Step 5-2: Study Design Keywords
+  study_design_keywords: [
+    { value: "Placebo-control", label: "Placebo-control" },
+    { value: "Active control", label: "Active control" },
+    { value: "Randomized", label: "Randomized" },
+    { value: "Non-Randomized", label: "Non-Randomized" },
+    { value: "Multiple-Blinded", label: "Multiple-Blinded" },
+    { value: "Single-Blinded", label: "Single-Blinded" },
+    { value: "Open", label: "Open" },
+    { value: "Multi-centre", label: "Multi-centre" },
+    { value: "Safety", label: "Safety" },
+    { value: "Efficacy", label: "Efficacy" },
+    { value: "Tolerability", label: "Tolerability" },
+    { value: "Pharmacokinetics", label: "Pharmacokinetics" },
+    { value: "Pharmacodynamics", label: "Pharmacodynamics" },
+    { value: "Interventional", label: "Interventional" },
+    { value: "Treatment", label: "Treatment" },
+    { value: "Parallel Assignment", label: "Parallel Assignment" },
+    { value: "Single group assignment", label: "Single group assignment" },
+    { value: "Prospective", label: "Prospective" },
+    { value: "Cohort", label: "Cohort" }
   ],
-  results_available: [
-    { value: "true", label: "Yes" },
-    { value: "false", label: "No" }
-  ],
-  endpoints_met: [
-    { value: "true", label: "Yes" },
-    { value: "false", label: "No" }
-  ],
-  adverse_events_reported: [
-    { value: "true", label: "Yes" },
-    { value: "false", label: "No" }
+  // Logs fields - Last Modified User
+  last_modified_user: [
+    { value: "Admin", label: "Admin" }
   ]
 }
 
 // Date fields that should show calendar input
 const dateFields = [
   "created_at",
-  "final_analysis_date", 
-  "interim_analysis_dates",
-  "primary_completion_date",
-  "regulatory_submission_date",
-  "study_completion_date",
-  "study_end_date",
-  "study_start_date",
-  "updated_at"
+  "updated_at",
+  "last_modified_date"
 ]
 
-export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySearch }: TherapeuticAdvancedSearchModalProps) {
+export function TherapeuticAdvancedSearchModal({
+  open,
+  onOpenChange,
+  onApplySearch,
+  trials = [],
+  currentFilters,
+  initialCriteria,
+  editingQueryId = null,
+  editingQueryTitle = "",
+  editingQueryDescription = "",
+  onSaveQuerySuccess
+}: TherapeuticAdvancedSearchModalProps) {
   const [criteria, setCriteria] = useState<TherapeuticSearchCriteria[]>([
     {
       id: "1",
@@ -360,16 +535,26 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
     }
   ])
   const [savedQueriesOpen, setSavedQueriesOpen] = useState(false)
+  const [saveQueryModalOpen, setSaveQueryModalOpen] = useState(false)
   const [savedQueries, setSavedQueries] = useState<any[]>([])
+  const [searchTerm, setSearchTerm] = useState("")
+  const [loadingQueries, setLoadingQueries] = useState(false)
   const [therapeuticData, setTherapeuticData] = useState<TherapeuticTrial[]>([])
   const [loading, setLoading] = useState(false)
+  const { getPrimaryDrugsOptions, refreshFromAPI } = useDrugNames()
 
   // Fetch therapeutic data when modal opens
   useEffect(() => {
     if (open) {
       fetchTherapeuticData()
+      // Refresh drug names from API to ensure we have the latest data
+      refreshFromAPI()
+      // Load initial criteria if provided
+      if (initialCriteria && initialCriteria.length > 0) {
+        setCriteria(initialCriteria)
+      }
     }
-  }, [open])
+  }, [open, initialCriteria, refreshFromAPI])
 
   const fetchTherapeuticData = async () => {
     try {
@@ -389,11 +574,14 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
   // Get unique values for a specific field from the therapeutic data
   const getFieldValues = (field: string): string[] => {
     const values = new Set<string>()
-    
-    therapeuticData.forEach(trial => {
+
+    // Use passed trials data or fallback to fetched data
+    const dataToUse = trials.length > 0 ? trials : therapeuticData;
+
+    dataToUse.forEach(trial => {
       // Handle different field paths
       let fieldValue = ''
-      
+
       if (field.includes('.')) {
         // Handle nested fields like 'overview.therapeutic_area'
         const [parent, child] = field.split('.')
@@ -445,6 +633,19 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
           case 'trial_record_status':
             fieldValue = trial.overview?.trial_record_status || ''
             break
+          // Handle Step 5-2 fields (outcome measures)
+          case 'purpose_of_trial':
+            fieldValue = trial.outcomes?.[0]?.purpose_of_trial || ''
+            break
+          case 'summary':
+            fieldValue = trial.outcomes?.[0]?.summary || ''
+            break
+          case 'treatment_regimen':
+            fieldValue = trial.outcomes?.[0]?.treatment_regimen || ''
+            break
+          case 'study_design':
+            fieldValue = trial.outcomes?.[0]?.study_design || ''
+            break
           // Handle array fields
           case 'trial_identifier':
             if (trial.overview?.trial_identifier) {
@@ -456,14 +657,85 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
               trial.overview.reference_links.forEach(link => values.add(link))
             }
             break
+          case 'last_modified_date':
+            if (trial.logs && trial.logs.length > 0) {
+              trial.logs.forEach(log => {
+                if (log.last_modified_date && log.last_modified_date.trim()) {
+                  values.add(log.last_modified_date.trim())
+                }
+              })
+            }
+            break
+          // Handle Step 5-2 fields (outcome measures)
+          case 'primaryOutcomeMeasures':
+            if (trial.outcomes) {
+              trial.outcomes.forEach(outcome => {
+                if (outcome.primary_outcome_measure && outcome.primary_outcome_measure.trim()) {
+                  values.add(outcome.primary_outcome_measure.trim())
+                }
+              })
+            }
+            break
+          case 'otherOutcomeMeasures':
+            if (trial.outcomes) {
+              trial.outcomes.forEach(outcome => {
+                if (outcome.other_outcome_measure && outcome.other_outcome_measure.trim()) {
+                  values.add(outcome.other_outcome_measure.trim())
+                }
+              })
+            }
+            break
+          case 'study_design_keywords':
+            if (trial.outcomes) {
+              trial.outcomes.forEach(outcome => {
+                if (outcome.study_design_keywords && outcome.study_design_keywords.trim()) {
+                  values.add(outcome.study_design_keywords.trim())
+                }
+              })
+            }
+            break
+          // Handle Step 5-3 fields (eligibility criteria)
+          case 'inclusion_criteria':
+            if (trial.criteria) {
+              trial.criteria.forEach(criterion => {
+                if (criterion.inclusion_criteria && criterion.inclusion_criteria.trim()) {
+                  values.add(criterion.inclusion_criteria.trim())
+                }
+              })
+            }
+            break
+          case 'exclusion_criteria':
+            if (trial.criteria) {
+              trial.criteria.forEach(criterion => {
+                if (criterion.exclusion_criteria && criterion.exclusion_criteria.trim()) {
+                  values.add(criterion.exclusion_criteria.trim())
+                }
+              })
+            }
+            break
+          // Handle Step 5-8 fields (notes)
+          case 'notes':
+            if (trial.notes && Array.isArray(trial.notes)) {
+              trial.notes.forEach(note => {
+                if (note && note.notes && note.notes.trim()) {
+                  values.add(note.notes.trim())
+                }
+              })
+            }
+            break
+          // Don't add dynamic values for last_modified_user - only use hardcoded "Admin"
+          // Don't add dynamic values for text fields: purpose_of_trial, summary, treatment_regimen
         }
       }
-      
-      if (fieldValue && fieldValue.trim()) {
+
+      // Only add fieldValue if it's not a text field that should be excluded from dropdowns
+      const textOnlyFields = ['purpose_of_trial', 'summary', 'treatment_regimen', 'primaryOutcomeMeasures',
+        'otherOutcomeMeasures', 'inclusion_criteria', 'exclusion_criteria', 'notes'];
+      if (fieldValue && fieldValue.trim() && !textOnlyFields.includes(field)) {
         values.add(fieldValue.trim())
       }
     })
-    
+
     return Array.from(values).sort()
   }
 
@@ -471,12 +743,66 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
   const renderValueInput = (criterion: TherapeuticSearchCriteria) => {
     const fieldOptionsForField = fieldOptions[criterion.field]
     const isDateField = dateFields.includes(criterion.field)
-    const dynamicValues = getFieldValues(criterion.field)
-    
+    // Exclude text-only fields from getting dynamic values - they should be text inputs
+    const textOnlyFields = ['title', 'trial_identifier', 'purpose_of_trial', 'summary', 'treatment_regimen',
+      'primaryOutcomeMeasures', 'otherOutcomeMeasures', 'inclusion_criteria',
+      'exclusion_criteria', 'notes', 'study_design', 'reference_links']
+    const dynamicValues = textOnlyFields.includes(criterion.field) ? [] : getFieldValues(criterion.field)
+
+    // Special handling for primary_drugs and other_drugs - use SearchableSelect with drug names from hook
+    if (criterion.field === "primary_drugs" || criterion.field === "other_drugs") {
+      const drugOptions = getPrimaryDrugsOptions().map(drug => ({
+        value: drug.value,
+        label: drug.label
+      }))
+
+      // Get the current value and normalize it
+      const currentValue = Array.isArray(criterion.value) ? criterion.value[0] || "" : (criterion.value as string || "");
+      const normalizedValue = currentValue.trim();
+
+      // Debug logging
+      console.log('Drug options for', criterion.field, ':', drugOptions.length, 'options');
+      console.log('Current value:', normalizedValue);
+      console.log('Value in options?', drugOptions.some(opt => opt.value === normalizedValue || opt.value.toLowerCase() === normalizedValue.toLowerCase()));
+
+      // If no options, show a message
+      if (drugOptions.length === 0) {
+        console.warn('No drug options available. Make sure drugs are loaded from the API.');
+      }
+
+      // Find matching value (case-insensitive fallback)
+      let matchingValue = normalizedValue;
+      if (normalizedValue && !drugOptions.some(opt => opt.value === normalizedValue)) {
+        // Try case-insensitive match
+        const caseInsensitiveMatch = drugOptions.find(opt =>
+          opt.value.toLowerCase() === normalizedValue.toLowerCase()
+        );
+        if (caseInsensitiveMatch) {
+          matchingValue = caseInsensitiveMatch.value;
+          console.log('Found case-insensitive match:', matchingValue);
+        }
+      }
+
+      return (
+        <SearchableSelect
+          value={matchingValue}
+          onValueChange={(value) => {
+            console.log('Drug selected:', value);
+            updateCriteria(criterion.id, "value", value);
+          }}
+          options={drugOptions}
+          placeholder={criterion.field === "primary_drugs" ? "Select primary drug" : "Select other drug"}
+          searchPlaceholder={criterion.field === "primary_drugs" ? "Search primary drugs..." : "Search other drugs..."}
+          emptyMessage={criterion.field === "primary_drugs" ? "No primary drug found." : "No other drug found."}
+          className="w-full"
+        />
+      )
+    }
+
     // Special handling for trial_tags - use multi-tag input
     if (criterion.field === "trial_tags") {
-      const tags = Array.isArray(criterion.value) ? criterion.value : 
-                   criterion.value ? [criterion.value] : [];
+      const tags = Array.isArray(criterion.value) ? criterion.value :
+        criterion.value ? [criterion.value] : [];
       return (
         <MultiTagInput
           value={tags}
@@ -486,19 +812,19 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
         />
       )
     }
-    
+
     // Date field with custom input
     if (isDateField) {
       return (
         <CustomDateInput
           value={Array.isArray(criterion.value) ? criterion.value[0] || "" : criterion.value}
           onChange={(value) => updateCriteria(criterion.id, "value", value)}
-          placeholder="Month Day Year"
+          placeholder="MM-DD-YYYY"
           className="w-full"
         />
       )
     }
-    
+
     // Dropdown for fields with specific options (hardcoded)
     if (fieldOptionsForField) {
       return (
@@ -519,28 +845,21 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
         </Select>
       )
     }
-    
+
     // Dynamic dropdown for fields with data from database
     if (dynamicValues.length > 0) {
       return (
-        <Select
-          value={Array.isArray(criterion.value) ? criterion.value[0] || "" : criterion.value}
+        <SearchableSelect
+          value={Array.isArray(criterion.value) ? criterion.value[0] || "" : (criterion.value as string)}
           onValueChange={(value) => updateCriteria(criterion.id, "value", value)}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="Select option" />
-          </SelectTrigger>
-          <SelectContent>
-            {dynamicValues.map((value) => (
-              <SelectItem key={value} value={value}>
-                {value}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+          options={dynamicValues.map(v => ({ value: v, label: v }))}
+          placeholder="Select option"
+          searchPlaceholder={`Search ${criterion.field.replace(/_/g, ' ')}...`}
+          className="w-full"
+        />
       )
     }
-    
+
     // Integer input for number_of_arms field
     if (criterion.field === "number_of_arms") {
       return (
@@ -565,7 +884,7 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
         />
       )
     }
-    
+
     // Default to text input for fields without specific options or dynamic data
     return (
       <Input
@@ -577,11 +896,26 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
   }
 
   const addCriteria = () => {
+    const dropdownFields = [
+      'therapeutic_area', 'trial_phase', 'status', 'primary_drugs', 'other_drugs',
+      'disease_type', 'patient_segment', 'line_of_therapy', 'sponsor_collaborators',
+      'sponsor_field_activity', 'associated_cro', 'countries', 'region', 'trial_record_status',
+      'gender', 'healthy_volunteers', 'trial_outcome', 'adverse_event_reported', 'adverse_event_type',
+      'publication_type', 'registry_name', 'study_type', 'study_design_keywords'
+    ];
+
+    // Set default operator based on field type
+    let defaultOperator = "contains";
+    if (dropdownFields.includes(criteria[criteria.length - 1]?.field)) {
+      defaultOperator = "is";
+    } else if (criteria[criteria.length - 1]?.field === "number_of_arms") {
+      defaultOperator = "equals";
+    }
+
     const newCriteria: TherapeuticSearchCriteria = {
-      
       id: Date.now().toString(),
       field: "title",
-      operator: "contains",
+      operator: defaultOperator,
       value: "",
       logic: "AND",
     }
@@ -596,13 +930,29 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
     setCriteria((prev) => prev.map((c) => {
       if (c.id === id) {
         const updated = { ...c, [field]: value };
-        
-        // Set default operator for number_of_arms field
-        if (field === "field" && value === "number_of_arms") {
-          updated.operator = "equals";
-          updated.value = "";
+
+        // Set default operator based on field type
+        if (field === "field") {
+          const dropdownFields = [
+            'therapeutic_area', 'trial_phase', 'status', 'primary_drugs', 'other_drugs',
+            'disease_type', 'patient_segment', 'line_of_therapy', 'sponsor_collaborators',
+            'sponsor_field_activity', 'associated_cro', 'countries', 'region', 'trial_record_status',
+            'gender', 'healthy_volunteers', 'trial_outcome', 'adverse_event_reported', 'adverse_event_type',
+            'publication_type', 'registry_name', 'study_type', 'study_design_keywords'
+          ];
+
+          if (dropdownFields.includes(value as string)) {
+            updated.operator = "is";
+            updated.value = "";
+          } else if (value === "number_of_arms") {
+            updated.operator = "equals";
+            updated.value = "";
+          } else {
+            updated.operator = "contains";
+            updated.value = "";
+          }
         }
-        
+
         return updated;
       }
       return c;
@@ -631,47 +981,193 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
   }
 
   // Load saved queries from localStorage
-  const loadSavedQueries = () => {
-    const queries = JSON.parse(localStorage.getItem('therapeuticSearchQueries') || '[]')
-    setSavedQueries(queries)
+  const loadSavedQueries = async () => {
+    setLoadingQueries(true)
+
+    try {
+      // Try to fetch from API first
+      let url = `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/queries/saved/user/dashboard-queries`
+
+      if (searchTerm.trim()) {
+        url += `?search=${encodeURIComponent(searchTerm.trim())}`
+      }
+
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        credentials: "include",
+      })
+
+      if (response.ok) {
+        const data = await response.json()
+
+        // If API returns empty data, fallback to localStorage
+        if (!data.data || data.data.length === 0) {
+          const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+          setSavedQueries(localQueries)
+        } else {
+          setSavedQueries(data.data || [])
+        }
+        return
+      }
+
+      // If API fails, fallback to localStorage
+      const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+      setSavedQueries(localQueries)
+
+    } catch (error) {
+      console.error("Error fetching saved queries:", error)
+
+      // Fallback to localStorage
+      try {
+        const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+        setSavedQueries(localQueries)
+      } catch (localError) {
+        console.error("Failed to load from localStorage:", localError)
+      }
+    } finally {
+      setLoadingQueries(false)
+    }
   }
 
   const handleOpenSavedQueries = () => {
+    setSearchTerm("")
     loadSavedQueries()
     setSavedQueriesOpen(true)
   }
 
   const handleLoadQuery = (query: any) => {
-    setCriteria(query.criteria)
-    setSavedQueriesOpen(false)
+    if (query.query_data && query.query_data.searchCriteria) {
+      setCriteria(query.query_data.searchCriteria)
+      toast({
+        title: "Query Loaded",
+        description: `"${query.title}" has been applied to your search`,
+      })
+      setSavedQueriesOpen(false)
+    }
   }
 
-  const handleDeleteQuery = (queryId: string) => {
-    const updatedQueries = savedQueries.filter(q => q.id !== queryId)
-    setSavedQueries(updatedQueries)
-    localStorage.setItem('therapeuticSearchQueries', JSON.stringify(updatedQueries))
+  const handleDeleteQuery = async (queryId: string) => {
+    try {
+      // Try API first
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_BASE_URL}/api/v1/queries/saved/${queryId}`,
+        {
+          method: "DELETE",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+        }
+      )
+
+      if (response.ok) {
+        toast({
+          title: "Success",
+          description: "Query deleted successfully",
+        })
+        // Refresh the list
+        await loadSavedQueries()
+        return
+      }
+
+      // If API fails, use localStorage fallback
+      const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+      const updatedQueries = localQueries.filter((q: any) => q.id !== queryId)
+      localStorage.setItem('unifiedSavedQueries', JSON.stringify(updatedQueries))
+
+      toast({
+        title: "Success",
+        description: "Query deleted successfully",
+      })
+
+      // Refresh the list
+      await loadSavedQueries()
+
+    } catch (error) {
+      console.error("Error deleting query:", error)
+
+      // Still try localStorage fallback
+      try {
+        const localQueries = JSON.parse(localStorage.getItem('unifiedSavedQueries') || '[]')
+        const updatedQueries = localQueries.filter((q: any) => q.id !== queryId)
+        localStorage.setItem('unifiedSavedQueries', JSON.stringify(updatedQueries))
+
+        toast({
+          title: "Success",
+          description: "Query deleted successfully",
+        })
+
+        // Refresh the list
+        await loadSavedQueries()
+      } catch (localError) {
+        console.error("Failed to delete from localStorage:", localError)
+        toast({
+          title: "Error",
+          description: "Failed to delete query",
+          variant: "destructive",
+        })
+      }
+    }
   }
 
   const handleSaveQuery = () => {
-    // Create a readable query name
-    const queryName = `Therapeutic Advanced Search (${criteria.length} criteria) - ${new Date().toLocaleDateString()}`;
-    
-    // Save to localStorage for demo purposes
-    const savedQueries = JSON.parse(localStorage.getItem('therapeuticSearchQueries') || '[]');
-    const newQuery = {
-      id: Date.now().toString(),
-      name: queryName,
-      criteria: criteria,
-      createdAt: new Date().toISOString()
-    };
-    
-    savedQueries.push(newQuery);
-    localStorage.setItem('therapeuticSearchQueries', JSON.stringify(savedQueries));
-    
-    // Show feedback
-    alert(`Query saved as: ${queryName}`);
-    console.log("Saving therapeutic query:", criteria)
+    setSaveQueryModalOpen(true)
   }
+
+  // Format date similar to QueryHistoryModal
+  const formatDate = (dateString: string) => {
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+  }
+
+  // Get filter summary
+  const getFilterSummary = (queryData: any) => {
+    if (!queryData) return "No filters"
+
+    const filterCount = Object.values(queryData.filters || {})
+      .reduce((count: number, filter: any) => count + (filter?.length || 0), 0)
+    const criteriaCount = queryData.searchCriteria?.length || 0
+    const hasSearch = queryData.searchTerm?.trim() ? 1 : 0
+
+    const total = filterCount + criteriaCount + hasSearch
+    if (total === 0) return "No filters"
+
+    const parts = []
+    if (filterCount > 0) parts.push(`${filterCount} filters`)
+    if (criteriaCount > 0) parts.push(`${criteriaCount} criteria`)
+    if (hasSearch) parts.push("search term")
+
+    return parts.join(", ")
+  }
+
+  // Debounced search effect
+  useEffect(() => {
+    if (savedQueriesOpen) {
+      const timeoutId = setTimeout(() => {
+        loadSavedQueries()
+      }, 300)
+
+      return () => clearTimeout(timeoutId)
+    }
+  }, [searchTerm, savedQueriesOpen])
+
+  // Filter saved queries
+  const filteredSavedQueries = savedQueries.filter(query => {
+    if (!searchTerm.trim()) return true
+    const search = searchTerm.toLowerCase()
+    return (
+      query.title?.toLowerCase().includes(search) ||
+      query.description?.toLowerCase().includes(search)
+    )
+  })
 
   return (
     <>
@@ -714,14 +1210,59 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {(criterion.field === "number_of_arms" 
-                          ? operators.filter(op => ["equals", "greater_than", "greater_than_equal", "less_than", "less_than_equal", "not_equals"].includes(op.value))
-                          : operators
-                        ).map((op) => (
-                          <SelectItem key={op.value} value={op.value}>
-                            {op.label}
-                          </SelectItem>
-                        ))}
+                        {(() => {
+                          // Define dropdown fields that should use exact matching
+                          const dropdownFields = [
+                            'therapeutic_area', 'trial_phase', 'status', 'primary_drugs', 'other_drugs',
+                            'disease_type', 'patient_segment', 'line_of_therapy', 'sponsor_collaborators',
+                            'sponsor_field_activity', 'associated_cro', 'countries', 'region', 'trial_record_status',
+                            'gender', 'healthy_volunteers', 'trial_outcome', 'adverse_event_reported', 'adverse_event_type',
+                            'publication_type', 'registry_name', 'study_type', 'study_design_keywords',
+                            'last_modified_user'
+                          ];
+
+                          // For dropdown fields, suggest exact matching operators
+                          if (dropdownFields.includes(criterion.field)) {
+                            return [
+                              { value: "is", label: "is" },
+                              { value: "is_not", label: "is not" },
+                              { value: "contains", label: "contains" },
+                              { value: "equals", label: "=" },
+                              { value: "not_equals", label: "!=" }
+                            ].map((op) => (
+                              <SelectItem key={op.value} value={op.value}>
+                                {op.label}
+                              </SelectItem>
+                            ));
+                          }
+
+                          // For date fields, show date comparison operators
+                          if (dateFields.includes(criterion.field)) {
+                            return operators.filter(op => ["equals", "is", "is_not", "not_equals", "greater_than", "greater_than_equal", "less_than", "less_than_equal", "contains"].includes(op.value))
+                              .map((op) => (
+                                <SelectItem key={op.value} value={op.value}>
+                                  {op.label}
+                                </SelectItem>
+                              ));
+                          }
+
+                          // For numeric fields, show numeric operators
+                          if (criterion.field === "number_of_arms" || criterion.field === "age_min" || criterion.field === "age_max") {
+                            return operators.filter(op => ["equals", "greater_than", "greater_than_equal", "less_than", "less_than_equal", "not_equals"].includes(op.value))
+                              .map((op) => (
+                                <SelectItem key={op.value} value={op.value}>
+                                  {op.label}
+                                </SelectItem>
+                              ));
+                          }
+
+                          // For all other fields, show all operators
+                          return operators.map((op) => (
+                            <SelectItem key={op.value} value={op.value}>
+                              {op.label}
+                            </SelectItem>
+                          ));
+                        })()}
                       </SelectContent>
                     </Select>
                   </div>
@@ -806,94 +1347,138 @@ export function TherapeuticAdvancedSearchModal({ open, onOpenChange, onApplySear
 
       {/* Saved Queries Modal */}
       <Dialog open={savedQueriesOpen} onOpenChange={setSavedQueriesOpen}>
-        <DialogContent className="max-w-4xl max-h-[80vh] p-0">
-          <DialogHeader className="px-6 py-4 border-b bg-blue-50">
-            <div className="flex items-center justify-between">
-              <DialogTitle className="text-lg font-semibold">Saved Therapeutic Search Queries</DialogTitle>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setSavedQueriesOpen(false)}
-                className="h-8 w-8 p-0"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
+        <DialogContent className="max-w-4xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>Saved Queries</DialogTitle>
           </DialogHeader>
 
-          <div className="p-6">
-            {savedQueries.length === 0 ? (
-              <div className="text-center py-8">
-                <div className="text-gray-500 text-lg mb-2">No saved queries found</div>
-                <div className="text-gray-400 text-sm">Save your first search query to see it here</div>
+          <div className="flex-1 flex flex-col space-y-4 overflow-hidden">
+            {/* Search */}
+            <div className="flex items-center space-x-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-4 w-4" />
+                <Input
+                  placeholder="Search saved queries..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="pl-10"
+                />
               </div>
-            ) : (
-              <div className="space-y-4">
-                {savedQueries.map((query) => (
-                  <div key={query.id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50">
-                    <div className="flex items-center justify-between">
-                      <div className="flex-1">
-                        <h3 className="font-medium text-gray-900">{query.name}</h3>
-                        <p className="text-sm text-gray-500 mt-1">
-                          Created: {new Date(query.createdAt).toLocaleDateString()} at {new Date(query.createdAt).toLocaleTimeString()}
-                        </p>
-                        <div className="mt-2">
-                          <span className="text-sm text-gray-600">
-                            {query.criteria.length} criteria: 
-                          </span>
-                          <div className="flex flex-wrap gap-2 mt-1">
-                            {query.criteria.slice(0, 3).map((criterion: any, index: number) => {
-                              const field = therapeuticSearchFields.find(f => f.value === criterion.field)
-                              return (
-                                <span key={index} className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-blue-100 text-blue-800">
-                                  {field?.label}: {criterion.value || 'Any'}
-                                </span>
-                              )
-                            })}
-                            {query.criteria.length > 3 && (
-                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs bg-gray-100 text-gray-600">
-                                +{query.criteria.length - 3} more
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2 ml-4">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleLoadQuery(query)}
-                          className="bg-blue-600 text-white hover:bg-blue-700"
-                        >
-                          Load Query
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDeleteQuery(query.id)}
-                          className="bg-red-600 text-white hover:bg-red-700"
-                        >
-                          Delete
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
+              {searchTerm && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setSearchTerm("")}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+
+            {/* Loading */}
+            {loadingQueries && (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-6 w-6 animate-spin mr-2" />
+                <span>Loading saved queries...</span>
               </div>
             )}
-          </div>
 
-          <div className="flex items-center justify-end px-6 py-4 border-t bg-gray-50">
-            <Button
-              variant="outline"
-              onClick={() => setSavedQueriesOpen(false)}
-              className="bg-gray-600 text-white hover:bg-gray-700"
-            >
-              Close
-            </Button>
+            {/* Results */}
+            {!loadingQueries && (
+              <div className="flex-1 overflow-auto">
+                {filteredSavedQueries.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    {searchTerm ? "No queries found matching your search" : "No saved queries yet"}
+                  </div>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Title</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead>Filters</TableHead>
+                        <TableHead>Saved</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredSavedQueries.map((query) => (
+                        <TableRow key={query.id} className="hover:bg-gray-50">
+                          <TableCell className="font-medium">
+                            <div className="flex items-center space-x-2">
+                              <span>{query.title}</span>
+                              <Badge variant="outline" className="text-xs">
+                                {query.query_type || "dashboard"}
+                              </Badge>
+                            </div>
+                          </TableCell>
+                          <TableCell className="max-w-xs">
+                            <div className="truncate text-sm text-gray-600">
+                              {query.description || "No description"}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="text-sm text-gray-600">
+                              {getFilterSummary(query.query_data)}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center text-sm text-gray-500">
+                              <CalendarIcon2 className="h-3 w-3 mr-1" />
+                              {formatDate(query.created_at)}
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex items-center space-x-1">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleLoadQuery(query)}
+                                title="Load this query"
+                              >
+                                <Eye className="h-3 w-3" />
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleDeleteQuery(query.id)}
+                                title="Delete this query"
+                                className="text-red-600 hover:text-red-700"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                )}
+              </div>
+            )}
+
+            {/* Close Button */}
+            <div className="flex justify-end pt-4 border-t">
+              <Button variant="outline" onClick={() => setSavedQueriesOpen(false)}>
+                Close
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Save Query Modal */}
+      <SaveQueryModal
+        open={saveQueryModalOpen}
+        onOpenChange={setSaveQueryModalOpen}
+        currentFilters={currentFilters || DEFAULT_THERAPEUTIC_FILTERS}
+        currentSearchCriteria={criteria}
+        searchTerm=""
+        editingQueryId={editingQueryId}
+        editingQueryTitle={editingQueryTitle}
+        editingQueryDescription={editingQueryDescription}
+        onSaveSuccess={onSaveQuerySuccess}
+      />
     </>
   )
 }

@@ -1,29 +1,99 @@
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+const DEFAULT_DEV_API_BASE = "http://localhost:5002";
+let cachedBaseUrl: string | null = null;
 
-function ensureBaseUrl(): void {
-  if (!API_BASE_URL) {
-    console.warn('NEXT_PUBLIC_API_BASE_URL is not set. Requests will fail.');
+const debugApiLog = (...args: unknown[]) => {
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[api] debugApiLog payload ->", ...args);
   }
+};
+
+function resolveBaseUrl(): string {
+  if (cachedBaseUrl !== null) {
+    debugApiLog("resolveBaseUrl using cached value", cachedBaseUrl);
+    return cachedBaseUrl;
+  }
+
+  const envBase = (process.env.NEXT_PUBLIC_API_BASE_URL || "").trim();
+  if (envBase) {
+    cachedBaseUrl = envBase.replace(/\/$/, "");
+    debugApiLog("resolveBaseUrl using env base", cachedBaseUrl);
+    return cachedBaseUrl;
+  }
+
+  if (typeof window !== "undefined") {
+    const origin = window.location.origin.replace(/\/$/, "");
+    cachedBaseUrl = origin;
+    debugApiLog("resolveBaseUrl using window origin", cachedBaseUrl);
+    return cachedBaseUrl;
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    cachedBaseUrl = DEFAULT_DEV_API_BASE;
+    debugApiLog("resolveBaseUrl using development fallback", cachedBaseUrl);
+    return cachedBaseUrl;
+  }
+
+  cachedBaseUrl = "";
+  debugApiLog("resolveBaseUrl defaulting to relative paths", cachedBaseUrl);
+  return cachedBaseUrl;
+}
+
+function buildRequestUrl(path: string): string {
+  const baseUrl = resolveBaseUrl();
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  const fullUrl = baseUrl ? `${baseUrl}${normalizedPath}` : normalizedPath;
+  debugApiLog("buildRequestUrl computed url", { baseUrl, normalizedPath, fullUrl });
+  return fullUrl;
 }
 
 async function request<T>(path: string, options: { method?: HttpMethod; body?: unknown; headers?: Record<string, string> } = {}): Promise<T> {
-  ensureBaseUrl();
   const { method = 'GET', body, headers = {} } = options;
-  const res = await fetch(`${API_BASE_URL}${path}`.replace(/\/$/, ''), {
-    method,
-    headers: { 'Content-Type': 'application/json', ...headers },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-    credentials: 'include',
-  });
-  let data: any = null;
-  try { data = await res.json(); } catch { /* ignore non-json */ }
-  if (!res.ok) {
-    const message = data?.error || data?.message || `Request failed (${res.status})`;
-    throw new Error(message);
+  const targetUrl = buildRequestUrl(path).replace(/\/$/, '');
+  debugApiLog("request executing fetch", { method, targetUrl, body });
+  
+  try {
+    const res = await fetch(targetUrl, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      credentials: 'include',
+    });
+    
+    let data: any = null;
+    try { 
+      data = await res.json(); 
+    } catch (parseError) { 
+      console.error("Failed to parse response as JSON:", parseError);
+      // If response is not JSON, try to get text
+      const text = await res.text();
+      console.error("Response text:", text);
+    }
+    
+    if (!res.ok) {
+      const message = data?.error || data?.message || `Request failed (${res.status})`;
+      console.error("API request failed:", {
+        status: res.status,
+        statusText: res.statusText,
+        url: targetUrl,
+        message,
+        data
+      });
+      throw new Error(message);
+    }
+    return data as T;
+  } catch (error) {
+    if (error instanceof Error) {
+      // Check if it's a network error
+      if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+        console.error("Network error - API might be unreachable:", targetUrl);
+        throw new Error(`Cannot connect to API. Please check if the backend is running and the API URL is configured correctly.`);
+      }
+      throw error;
+    }
+    throw new Error("An unexpected error occurred");
   }
-  return data as T;
 }
 
 export const authApi = {
@@ -45,6 +115,12 @@ export const usersApi = {
     const res = await request<{ users: any[] }>(`/api/v1/users/getAllUsers`)
     return res?.users ?? []
   },
+  getById: async (userId: string) => {
+    const res = await request<{ user: any }>(`/api/v1/users/getUserById/${userId}`)
+    return res?.user ?? null
+  },
+  delete: (userId: string) =>
+    request(`/api/v1/users/deleteUser/${userId}`, { method: 'DELETE' }),
 };
 
 // Activity Logs
@@ -161,6 +237,12 @@ export const rolesApi = {
   }, // shape: [{ user, roles: [] }]
   assignRole: (userId: string, roleId: string) => request(`/user-roles`, { method: 'POST', body: { user_id: userId, role_id: roleId } }),
   removeRole: (userRoleId: string) => request(`/user-roles/${userRoleId}`, { method: 'DELETE' }),
+  getUserRoles: async (userId: string) => {
+    const res = await request<{ roles: Array<{ id: string; user_id: string; role_id: string; role_name: string }> }>(
+      `/api/v1/user-roles/getUserRoles/${userId}`
+    );
+    return res?.roles ?? [];
+  },
 };
 
 // Approvals (Pending Changes)

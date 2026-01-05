@@ -29,14 +29,21 @@ class TherapeuticTimingRepository {
       "result_published_date_actual",
       "result_published_date_benchmark",
       "result_published_date_estimated",
+      "overall_duration_complete",
+      "overall_duration_publish",
+      "timing_references",
     ];
     const placeholders = fields.map((_, idx) => `$${idx + 1}`).join(",");
     const query = `INSERT INTO "therapeutic_timing" (${fields.join(
       ","
     )}) VALUES (${placeholders}) RETURNING *`;
-    const values = fields.map((f) =>
-      f === "trial_id" ? data[f] : data[f] || null
-    );
+    const values = fields.map((f) => {
+      if (f === "trial_id") return data[f];
+      if (f === "timing_references" && data[f]) {
+        return JSON.stringify(data[f]);
+      }
+      return data[f] || null;
+    });
     const r = await this.pool.query(query, values);
     return r.rows[0];
   }
@@ -65,14 +72,21 @@ class TherapeuticTimingRepository {
       "result_published_date_actual",
       "result_published_date_benchmark",
       "result_published_date_estimated",
+      "overall_duration_complete",
+      "overall_duration_publish",
+      "timing_references",
     ];
     const placeholders = fields.map((_, idx) => `$${idx + 1}`).join(",");
     const query = `INSERT INTO "therapeutic_timing" (${fields.join(
       ","
     )}) VALUES (${placeholders}) RETURNING *`;
-    const values = fields.map((f) =>
-      f === "trial_id" ? data[f] : data[f] || null
-    );
+    const values = fields.map((f) => {
+      if (f === "trial_id") return data[f];
+      if (f === "timing_references" && data[f]) {
+        return JSON.stringify(data[f]);
+      }
+      return data[f] || null;
+    });
     const r = await client.query(query, values);
     return r.rows[0];
   }
@@ -111,7 +125,12 @@ class TherapeuticTimingRepository {
     const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
     if (entries.length === 0) return null;
     const fields = entries.map(([k]) => k);
-    const values = entries.map(([, v]) => v);
+    const values = entries.map(([k, v]) => {
+      if (k === 'timing_references' && v) {
+        return JSON.stringify(v);
+      }
+      return v;
+    });
     const setClause = fields.map((f, idx) => `${f} = $${idx + 2}`).join(", ");
     const q = `UPDATE "therapeutic_timing" SET ${setClause} WHERE id = $1 RETURNING *`;
     const r = await this.pool.query(q, [id, ...values]);
@@ -122,7 +141,12 @@ class TherapeuticTimingRepository {
     const entries = Object.entries(updates).filter(([, v]) => v !== undefined);
     if (entries.length === 0) return [];
     const fields = entries.map(([k]) => k);
-    const values = entries.map(([, v]) => v);
+    const values = entries.map(([k, v]) => {
+      if (k === 'timing_references' && v) {
+        return JSON.stringify(v);
+      }
+      return v;
+    });
     const setClause = fields.map((f, idx) => `${f} = $${idx + 2}`).join(", ");
     const q = `UPDATE "therapeutic_timing" SET ${setClause} WHERE trial_id = $1 RETURNING *`;
     const r = await this.pool.query(q, [trialId, ...values]);

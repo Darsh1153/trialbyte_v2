@@ -28,6 +28,7 @@ const register = async (req, res) => {
     sex,
     age,
     plan,
+    ipAuthority,
   } = req.body || {};
 
   if (!username || !email || !password) {
@@ -51,6 +52,8 @@ const register = async (req, res) => {
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
+  // Map ipAuthority to plan if provided (since database uses plan field for IP Authority)
+  const planValue = ipAuthority || plan;
   const created = await userRepository.create({
     username,
     email,
@@ -62,7 +65,7 @@ const register = async (req, res) => {
     region,
     sex,
     age,
-    plan,
+    plan: planValue,
   });
   // Assign default "User" role
   const UserRoleId = await roleRepository.findByName("User");
@@ -119,42 +122,66 @@ const register = async (req, res) => {
 };
 
 const login = async (req, res) => {
-  const { email, password } = req.body || {};
-  if (!email || !password) {
+  try {
+    console.log("🔐 Login attempt started");
+    const { email, password } = req.body || {};
+    
+    if (!email || !password) {
+      console.log("❌ Missing email or password");
+      return res
+        .status(StatusCodes.BAD_REQUEST)
+        .json({ message: "email and password are required" });
+    }
+
+    console.log(`🔍 Looking up user with email: ${email}`);
+    const user = await userRepository.findByEmail(email);
+    
+    if (!user) {
+      console.log(`❌ User not found for email: ${email}`);
+      return res
+        .status(StatusCodes.UNAUTHORIZED)
+        .json({ message: "Invalid credentials" });
+    }
+
+    console.log(`✅ User found: ${user.username} (${user.id})`);
+    console.log(`🔐 Comparing password...`);
+    
+    const isValid = await bcrypt.compare(password, user.password || "");
+    
+    if (!isValid) {
+      console.log(`❌ Password comparison failed for user: ${user.username}`);
+      return res
+        .status(StatusCodes.UNAUTHORIZED)
+        .json({ message: "Invalid credentials" });
+    }
+
+    console.log(`✅ Password verified for user: ${user.username}`);
+    console.log(`📋 Fetching user roles...`);
+
+    // Fetch user roles
+    const userRoles = await userRoleRepository.getUserRoles(user.id);
+    console.log(`✅ User roles fetched:`, userRoles.map(r => r.role_name).join(", "));
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email },
+      process.env.JWT_SECRET || "dev_secret",
+      { expiresIn: "7d" }
+    );
+
+    console.log(`✅ Login successful for user: ${user.username}`);
+    
+    const { password: _, ...safeUser } = user;
+    return res.status(StatusCodes.OK).json({
+      token,
+      user: safeUser,
+      roles: userRoles,
+    });
+  } catch (error) {
+    console.error("❌ Login error:", error);
     return res
-      .status(StatusCodes.BAD_REQUEST)
-      .json({ message: "email and password are required" });
+      .status(StatusCodes.INTERNAL_SERVER_ERROR)
+      .json({ message: "Internal server error", error: error.message });
   }
-
-  const user = await userRepository.findByEmail(email);
-  if (!user) {
-    return res
-      .status(StatusCodes.UNAUTHORIZED)
-      .json({ message: "Invalid credentials" });
-  }
-
-  const isValid = await bcrypt.compare(password, user.password || "");
-  if (!isValid) {
-    return res
-      .status(StatusCodes.UNAUTHORIZED)
-      .json({ message: "Invalid credentials" });
-  }
-
-  // Fetch user roles
-  const userRoles = await userRoleRepository.getUserRoles(user.id);
-
-  const token = jwt.sign(
-    { userId: user.id, email: user.email },
-    process.env.JWT_SECRET || "dev_secret",
-    { expiresIn: "7d" }
-  );
-
-  const { password: _, ...safeUser } = user;
-  return res.status(StatusCodes.OK).json({
-    token,
-    user: safeUser,
-    roles: userRoles,
-  });
 };
 
 const getAll = async (req, res) => {
